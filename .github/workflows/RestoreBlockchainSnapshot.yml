@@ -39,7 +39,7 @@ jobs:
       # Checkout the repository to the GitHub Actions runner
       - uses: actions/checkout@v3
         with:
-          token: ${{ secrets.TOKEN }}
+          token: ${{ secrets.GIT_TOKEN }}
       - name: Read region
         run: |
           echo "REGION=$(cat $REGION_FILE_PATH)" >> $GITHUB_ENV

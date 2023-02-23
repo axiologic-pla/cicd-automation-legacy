@@ -52,7 +52,7 @@ jobs:
       # Checkout the repository to the GitHub Actions runner
       - uses: actions/checkout@v3
         with:
-          token: ${{ secrets.TOKEN }}
+          token: ${{ secrets.GIT_TOKEN }}
 
       - name: Configure AWS Credentials Action For GitHub Actions
         uses: aws-actions/configure-aws-credentials@v1

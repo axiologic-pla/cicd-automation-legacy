@@ -38,7 +38,7 @@ jobs:
       # Checkout the repository to the GitHub Actions runner
       - uses: actions/checkout@v3
         with:
-          token: ${{ secrets.TOKEN }}
+          token: ${{ secrets.GIT_TOKEN }}
 
       - name: Read region
         run: |
@@ -82,7 +82,7 @@ jobs:
           cat > $GITHUB_INFO_FILE_PATH << EOF          
           git_shared_configuration:
             repository_name: ${{github.repository}}
-            read_write_token: ${{secrets.TOKEN}}
+            read_write_token: ${{secrets.GIT_TOKEN}}
           
           git_upload:
             enabled: true

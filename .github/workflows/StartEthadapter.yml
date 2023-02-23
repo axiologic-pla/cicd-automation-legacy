@@ -31,7 +31,7 @@ jobs:
           echo "REGION_FILE_PATH=./private/${{ github.event.inputs.clusterAlias }}/${{ github.event.inputs.networkName }}/region" >> $GITHUB_ENV
       - uses: actions/checkout@v3
         with:
-          token: ${{ secrets.TOKEN }}          
+          token: ${{ secrets.GIT_TOKEN }}          
 
       - name: Read region
         run: |
