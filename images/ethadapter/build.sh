@@ -1,8 +1,17 @@
-git clone http://github.com/pharmaledgerassoc/epi-workspace tmp/epi
+chmod +x values.sh
+source values.sh
+
+git clone $EPI_WORKSPACE tmp/epi
 cd tmp/epi
-rm -rf ethadapter
-git clone http://github.com/opendsu/eth-adapter ethadapter
-npm install
+
+if [ "$BUILD_TYPE" == "dev" ]; then
+  echo "npm run dev-install"
+  npm run dev-install
+else
+  echo "npm install"
+  npm install
+fi
+
 node ./node_modules/octopus/scripts/setEnv --file=../../../env.json "node ./bin/octopusRun.js postinstall"
 
 cd ./ethadapter/EthAdapter

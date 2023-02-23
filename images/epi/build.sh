@@ -1,8 +1,11 @@
 #!/bin/bash
-git clone http://github.com/pharmaledgerassoc/epi-workspace tmp/epi
+chmod +x values.sh
+source values.sh
+git clone $EPI_WORKSPACE tmp/epi
+
 cd tmp/epi
-chmod +x ../../values.sh 
 source ../../values.sh
+
 if [ "$BUILD_TYPE" == "dev" ]; then
   echo "npm run dev-install"
   npm run dev-install
