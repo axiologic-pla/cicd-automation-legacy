@@ -1,0 +1,149 @@
+name: 'Destroy infrastructure'
+
+on:
+  workflow_dispatch:
+    inputs:
+      networkName:
+        description: 'Enter the network name'
+        required: true
+        type: string
+      clusterAlias:
+        description: 'Enter the name of your cluster'
+        required: true
+        type: string
+
+permissions:
+  id-token: write # This is required for requesting the JWT
+  contents: read  # This is required for actions/checkout
+
+jobs:
+  destroyInfrastructure:
+    name: 'Destroy infrastructure'
+    runs-on: ubuntu-latest
+    environment: production
+
+    # Use the Bash shell regardless whether the GitHub Actions runner is ubuntu-latest, macos-latest, or windows-latest
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Set env variables
+        run: |
+          echo "NETWORK_PATH=./private/${{ github.event.inputs.networkName }}" >> $GITHUB_ENV
+          echo "CLUSTER_PATH=./private/${{ github.event.inputs.clusterAlias }}/${{ github.event.inputs.networkName }}" >> $GITHUB_ENV
+          echo "CREATE_INFRA_FOLDER_PATH=./private/${{ github.event.inputs.clusterAlias }}/${{ github.event.inputs.networkName }}/create-infrastructure" >> $GITHUB_ENV
+          echo "CREATE_INFRA_TF_STATE_PATH=./private/${{ github.event.inputs.clusterAlias }}/${{ github.event.inputs.networkName }}/create-infrastructure/terraform.tfstate" >> $GITHUB_ENV       
+          echo "CREATE_INFRA_TF_SCRIPTS_PATH=./pl-automation/deployments/terraform/aws-eks-create-infrastructure-pla/create-cluster" >> $GITHUB_ENV
+          echo "GENERATED_CREATE_INFRA_TF_STATE_PATH=./pl-automation/deployments/terraform/aws-eks-create-infrastructure-pla/create-cluster/terraform.tfstate" >> $GITHUB_ENV
+          echo "KUBECONFIG_FILE_PATH=./pl-automation/deployments/terraform/aws-eks-bootstrap-pla/bootstrap-cluster/kubeconfig.yaml" >> $GITHUB_ENV
+          echo "BOOTSTRAP_INFRA_FOLDER_PATH=./private/${{ github.event.inputs.clusterAlias }}/${{ github.event.inputs.networkName }}/bootstrap-infrastructure" >> $GITHUB_ENV
+          echo "BOOTSTRAP_INFRA_TF_STATE_PATH=./private/${{ github.event.inputs.clusterAlias }}/${{ github.event.inputs.networkName }}/bootstrap-infrastructure/terraform.tfstate" >> $GITHUB_ENV       
+          echo "BOOTSTRAP_INFRA_TF_SCRIPTS_PATH=./pl-automation/deployments/terraform/aws-eks-bootstrap-pla/bootstrap-cluster" >> $GITHUB_ENV
+          echo "GENERATED_BOOTSTRAP_INFRA_TF_STATE_PATH=./pl-automation/deployments/terraform/aws-eks-bootstrap-pla/bootstrap-cluster/terraform.tfstate" >> $GITHUB_ENV
+          
+          echo "REGION_FILE_PATH=./private/${{ github.event.inputs.clusterAlias }}/${{ github.event.inputs.networkName }}/region" >> $GITHUB_ENV
+          echo "ELASTIC_IP_ALLOCATION_ID_PATH=./private/${{ github.event.inputs.clusterAlias }}/${{ github.event.inputs.networkName }}/elasticIPsAllocationIds" >> $GITHUB_ENV
+      # Checkout the repository to the GitHub Actions runner
+      - uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.TOKEN }}
+
+      - name: Read elasticIpAllocationId and region
+        run: |
+          echo "REGION=$(cat $REGION_FILE_PATH)" >> $GITHUB_ENV
+          echo "ELASTIC_IP_ALLOCATION_ID=$(cat $ELASTIC_IP_ALLOCATION_ID_PATH)" >> $GITHUB_ENV
+
+      - name: Clone pl-automation
+        run: |
+          git clone ${{secrets.CI_CD_AUTOMATION_REPO_URL}} pl-automation
+
+      - name: Configure AWS Credentials Action For GitHub Actions
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          role-to-assume: ${{ secrets.AWS_GH_ACTIONS_ROLE }}
+          aws-region: ${{env.REGION}}
+      - name: Connect to cluster
+        run: |
+          aws eks --region ${{env.REGION}} update-kubeconfig --name ${{ github.event.inputs.clusterAlias }}
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v3
+
+      - name: Run kubectl
+        run: |
+          kubectl get all -A
+
+      - name: Install helm
+        uses: azure/setup-helm@v3
+        with:
+          version: '3.7.0'
+
+      - name: Delete ingress
+        run: |
+          kubectl delete ingress pla-health-ingress
+
+      - name: Uninstall Ingress nginx controller
+        run: |
+          helm uninstall --wait ingress-nginx -n ingress-nginx
+
+      - name: 'Move terraform.tfstate to ./pl-automation/deployments/terraform/aws-eks-infrastructure-pla/create-cluster if it exists'
+        run: |
+          if test -f $CREATE_INFRA_TF_STATE_PATH; then
+            mv $CREATE_INFRA_TF_STATE_PATH $CREATE_INFRA_TF_SCRIPTS_PATH
+          fi
+
+      - name: 'Move terraform.tfstate to ./pl-automation/deployments/terraform/aws-eks-bootstrap-pla/bootstrap-infrastructure if it exists'
+        run: |
+          if test -f $BOOTSTRAP_INFRA_TF_STATE_PATH; then
+            mv $BOOTSTRAP_INFRA_TF_STATE_PATH $BOOTSTRAP_INFRA_TF_SCRIPTS_PATH
+          fi
+
+      - name: 'Generate kubeconfig.yaml file'
+        run: |
+          aws eks --region ${{env.REGION}} update-kubeconfig --name ${{ github.event.inputs.clusterAlias }} --kubeconfig $KUBECONFIG_FILE_PATH
+
+      # Install the latest version of Terraform CLI and configure the Terraform CLI configuration file with a Terraform Cloud user API token
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v1
+      # Initialize a new or existing Terraform working directory by creating initial files, loading any remote state, downloading modules, etc.
+
+      - name: Terraform Init
+        run: terraform -chdir=$BOOTSTRAP_INFRA_TF_SCRIPTS_PATH init
+
+        # On push to "master", build or change infrastructure according to Terraform configuration files
+        # Note: It is recommended to set up a required "strict" status check in your repository for "Terraform Cloud". See the documentation on "strict" required status checks for more information: https://help.github.com/en/github/administering-a-repository/types-of-required-status-checks
+      - name: Terraform Destroy bootstrap
+        run: terraform -chdir=$BOOTSTRAP_INFRA_TF_SCRIPTS_PATH destroy -auto-approve -input=false
+        env:
+          TF_VAR_account_id: ${{ secrets.ACCOUNT_ID }}
+          TF_VAR_region: ${{env.REGION}}
+          TF_VAR_eks_cluster_name: ${{ github.event.inputs.clusterAlias }}
+
+      - name: Terraform Init
+        run: terraform -chdir=$CREATE_INFRA_TF_SCRIPTS_PATH init
+
+      - name: Terraform Destroy infra
+        run: terraform -chdir=$CREATE_INFRA_TF_SCRIPTS_PATH destroy -auto-approve -input=false
+        env:
+          TF_VAR_eks_aws_auth_roles: ${{secrets.EKS_AWS_AUTH_ROLES}}
+          TF_VAR_eks_aws_auth_users: ${{secrets.EKS_AWS_AUTH_USERS}}
+          TF_VAR_account_id: ${{secrets.ACCOUNT_ID}}
+          TF_VAR_region: ${{env.REGION}}
+          TF_VAR_vpc_external_nat_ip_ids: ${{env.ELASTIC_IP_ALLOCATION_ID}}
+          TF_VAR_eks_cluster_name: ${{ github.event.inputs.clusterAlias }}
+          TF_VAR_vpc_single_nat_gateway: true
+          TF_VAR_vpc_one_nat_gateway_per_az: false
+
+      - name: Delete config folder for cluster
+        run: |
+          git config --global user.email ${{ secrets.GIT_EMAIL }}
+          git config --global user.name ${{ secrets.GIT_USERNAME }}    
+          git pull
+          rm -rf $CREATE_INFRA_FOLDER_PATH
+          rm -rf $BOOTSTRAP_INFRA_FOLDER_PATH
+          rm -f $ELASTIC_IP_ALLOCATION_ID_PATH
+          rm -f $REGION_FILE_PATH
+          git add -f $CLUSTER_PATH
+          git commit -m "Destroyed cluster ${{github.event.inputs.clusterAlias}}"
+          git push origin master

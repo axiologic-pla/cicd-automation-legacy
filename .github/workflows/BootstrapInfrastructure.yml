@@ -1,0 +1,116 @@
+name: 'Bootstrap infrastructure'
+
+on:
+  workflow_dispatch:
+    inputs:
+      networkName:
+        description: 'Enter the network name'
+        required: true
+        type: string
+      clusterAlias:
+        description: 'Enter the name of your cluster'
+        required: true
+        type: string
+
+permissions:
+  id-token: write # This is required for requesting the JWT
+  contents: read  # This is required for actions/checkout
+
+jobs:
+  createInfrastructure:
+    name: 'Bootstrap infrastructure'
+    runs-on: ubuntu-latest
+    environment: production
+
+    # Use the Bash shell regardless whether the GitHub Actions runner is ubuntu-latest, macos-latest, or windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Set env variables
+        run: |
+          echo "NETWORK_PATH=./private/${{ github.event.inputs.networkName }}" >> $GITHUB_ENV
+          echo "CLUSTER_PATH=./private/${{ github.event.inputs.clusterAlias }}/${{ github.event.inputs.networkName }}" >> $GITHUB_ENV
+          echo "TERRAFORM_STATE_FOLDER_PATH=./private/${{ github.event.inputs.clusterAlias }}/${{ github.event.inputs.networkName }}/bootstrap-infrastructure" >> $GITHUB_ENV
+          echo "TERRAFORM_STATE_PATH=./private/${{ github.event.inputs.clusterAlias }}/${{ github.event.inputs.networkName }}/bootstrap-infrastructure/terraform.tfstate" >> $GITHUB_ENV
+          echo "TERRAFORM_SCRIPTS_PATH=./pl-automation/deployments/terraform/aws-eks-bootstrap-pla/bootstrap-cluster" >> $GITHUB_ENV
+          echo "GENERATED_TERRAFORM_STATE_PATH=./pl-automation/deployments/terraform/aws-eks-bootstrap-pla/bootstrap-cluster/terraform.tfstate" >> $GITHUB_ENV
+          echo "KUBECONFIG_FILE_PATH=./pl-automation/deployments/terraform/aws-eks-bootstrap-pla/bootstrap-cluster/kubeconfig.yaml" >> $GITHUB_ENV
+          echo "REGION_FILE_PATH=./private/${{ github.event.inputs.clusterAlias }}/${{ github.event.inputs.networkName }}/region" >> $GITHUB_ENV
+      # Checkout the repository to the GitHub Actions runner
+      - uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.TOKEN }}
+
+      - name: Read region
+        run: |
+          echo "REGION=$(cat $REGION_FILE_PATH)" >> $GITHUB_ENV
+
+      - name: Clone pl-automation
+        run: |
+          git clone ${{secrets.CI_CD_AUTOMATION_REPO_URL}} pl-automation
+
+      - name: Configure AWS Credentials Action For GitHub Actions
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          role-to-assume: ${{ secrets.AWS_GH_ACTIONS_ROLE }}
+          aws-region: ${{env.REGION}}
+
+      - name: 'Generate kubeconfig.yaml file'
+        run: |
+          aws eks --region ${{env.REGION}} update-kubeconfig --name ${{ github.event.inputs.clusterAlias }} --kubeconfig $KUBECONFIG_FILE_PATH
+
+      - name: 'Move terraform.tfstate to ./pl-automation/deployments/terraform/aws-eks-bootstrap-pla/bootstrap-cluster if it exists'
+        run: |
+          if test -f $TERRAFORM_STATE_PATH; then
+            mv $TERRAFORM_STATE_PATH $TERRAFORM_SCRIPTS_PATH
+          fi
+
+      # Install the latest version of Terraform CLI and configure the Terraform CLI configuration file with a Terraform Cloud user API token
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v1
+      # Initialize a new or existing Terraform working directory by creating initial files, loading any remote state, downloading modules, etc.
+      - name: Terraform Init
+        run: terraform -chdir=$TERRAFORM_SCRIPTS_PATH init
+
+        # On push to "master", build or change infrastructure according to Terraform configuration files
+        # Note: It is recommended to set up a required "strict" status check in your repository for "Terraform Cloud". See the documentation on "strict" required status checks for more information: https://help.github.com/en/github/administering-a-repository/types-of-required-status-checks
+      - name: Terraform Apply
+        run: terraform -chdir=$TERRAFORM_SCRIPTS_PATH apply -auto-approve -input=false
+        env:
+          TF_VAR_account_id: ${{ secrets.ACCOUNT_ID }}
+          TF_VAR_region: ${{env.REGION}}
+          TF_VAR_eks_cluster_name: ${{ github.event.inputs.clusterAlias }}
+
+      - name: Terraform destroy
+        if: ${{failure()}}
+        run: terraform -chdir=$TERRAFORM_SCRIPTS_PATH destroy -auto-approve -input=false
+        env:
+          TF_VAR_account_id: ${{ secrets.ACCOUNT_ID }}
+          TF_VAR_region: ${{env.REGION}}
+          TF_VAR_eks_cluster_name: ${{ github.event.inputs.clusterAlias }}
+
+      - name: 'Copy terraform.tfstate from ./pl-automation/deployments/terraform/aws-eks-bootstrap-pla/bootstrap-cluster'
+        run: |
+          if [ ! -d $TERRAFORM_STATE_FOLDER_PATH ]; then
+            mkdir -p $TERRAFORM_STATE_FOLDER_PATH
+          fi
+          
+          cp $GENERATED_TERRAFORM_STATE_PATH $TERRAFORM_STATE_FOLDER_PATH
+
+      - name: 'Commit terraform.tfstate'
+        run: |
+          git config --global user.email ${{ secrets.GIT_EMAIL }}
+          git config --global user.name ${{ secrets.GIT_USERNAME }}          
+          git pull
+          git add -f $TERRAFORM_STATE_PATH
+          git commit -m "Updated terraform.tfstate"
+          git push origin master
+
+      - name: Terraform destroy
+        if: ${{failure()}}
+        run: terraform -chdir=$TERRAFORM_SCRIPTS_PATH destroy -auto-approve -input=false
+        env:
+          TF_VAR_account_id: ${{ secrets.ACCOUNT_ID }}
+          TF_VAR_region: ${{env.REGION}}
+          TF_VAR_eks_cluster_name: ${{ github.event.inputs.clusterAlias }}

@@ -1,0 +1,57 @@
+name: 'Initialize environment'
+
+on:
+  workflow_dispatch:
+    inputs:
+      networkName:
+        description: 'Enter the network name'
+        required: true
+        type: string
+      clusterAlias:
+        description: 'Enter the name of your cluster'
+        required: true
+        type: string
+
+permissions:
+  id-token: write # This is required for requesting the JWT
+  contents: read  # This is required for actions/checkout
+
+jobs:
+  createInfrastructure:
+    name: 'Initialize environment'
+    runs-on: ubuntu-latest
+    environment: production
+
+    # Use the Bash shell regardless whether the GitHub Actions runner is ubuntu-latest, macos-latest, or windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Set env variables
+        run: |
+          echo "NETWORK_PATH=./${{ github.event.inputs.networkName }}" >> $GITHUB_ENV
+          echo "PRIVATE_PATH=./private" >> $GITHUB_ENV
+          echo "CLUSTER_PATH=./${{ github.event.inputs.networkName }}/${{ github.event.inputs.clusterAlias }}" >> $GITHUB_ENV
+          echo "TMP_FOLDER_PATH=./${{ github.event.inputs.networkName }}/${{ github.event.inputs.clusterAlias }}/tmp" >> $GITHUB_ENV          
+      # Checkout the repository to the GitHub Actions runner
+      - uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.TOKEN }}
+
+      - name: Clone pl-automation
+        run: |
+          git clone ${{secrets.CI_CD_AUTOMATION_REPO_URL}} pl-automation
+      
+      - name: Init environment
+        run: |
+          cd $PRIVATE_PATH
+          ../pl-automation/deployments/bin/init.sh ${{ github.event.inputs.clusterAlias }} ${{ github.event.inputs.networkName }}
+      - name: 'Commit changes'
+        run: |
+          cd $PRIVATE_PATH
+          git config --global user.email ${{ secrets.GIT_EMAIL }}
+          git config --global user.name ${{ secrets.GIT_USERNAME }}
+          git pull 
+          git add .
+          git commit -m "Initialized cluster ${{github.event.inputs.clusterAlias}}"
+          git push origin master

@@ -1,0 +1,255 @@
+name: 'Create infrastructure'
+
+on:
+  workflow_dispatch:
+    inputs:
+      networkName:
+        description: 'Enter the network name'
+        required: true
+        type: string
+      clusterAlias:
+        description: 'Enter the name of your cluster'
+        required: true
+        type: string
+      region:
+        description: 'Enter the region where the cluster is created'
+        required: true
+        type: string
+      dnsName:
+        description: 'Enter the DNS name for your epi installation'
+        required: true
+        type: string
+        
+permissions:
+  id-token: write # This is required for requesting the JWT
+  contents: read  # This is required for actions/checkout
+
+jobs:
+  createInfrastructure:
+    name: 'Create infrastructure'
+    runs-on: ubuntu-latest
+    environment: production
+
+    # Use the Bash shell regardless whether the GitHub Actions runner is ubuntu-latest, macos-latest, or windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Set env variables
+        run: |
+          echo "NETWORK_PATH=./private/${{ github.event.inputs.networkName }}" >> $GITHUB_ENV
+          echo "CLUSTER_PATH=./private/${{ github.event.inputs.clusterAlias }}/${{ github.event.inputs.networkName }}" >> $GITHUB_ENV
+          echo "TERRAFORM_STATE_FOLDER_PATH=./private/${{ github.event.inputs.clusterAlias }}/${{ github.event.inputs.networkName }}/create-infrastructure" >> $GITHUB_ENV
+          echo "SECRET_FILE_PATH=./private/${{ github.event.inputs.clusterAlias }}/${{ github.event.inputs.networkName }}/secret.yaml" >> $GITHUB_ENV
+          echo "REGION_FILE_PATH=./private/${{ github.event.inputs.clusterAlias }}/${{ github.event.inputs.networkName }}/region" >> $GITHUB_ENV
+          echo "ELASTIC_IP_ALLOCATION_ID_PATH=./private/${{ github.event.inputs.clusterAlias }}/${{ github.event.inputs.networkName }}/elasticIPsAllocationIds" >> $GITHUB_ENV
+          echo "DNS_NAME_FILE_PATH=./private/${{ github.event.inputs.clusterAlias }}/${{ github.event.inputs.networkName }}/create-infrastructure/dnsName" >> $GITHUB_ENV
+          echo "INGRESS_FILE_PATH=./private/${{ github.event.inputs.clusterAlias }}/${{ github.event.inputs.networkName }}/ingress.yaml" >> $GITHUB_ENV
+          echo "TERRAFORM_STATE_PATH=./private/${{ github.event.inputs.clusterAlias }}/${{ github.event.inputs.networkName }}/create-infrastructure/terraform.tfstate" >> $GITHUB_ENV       
+          echo "TERRAFORM_SCRIPTS_PATH=./pl-automation/deployments/terraform/aws-eks-create-infrastructure-pla/create-cluster" >> $GITHUB_ENV
+          echo "GENERATED_TERRAFORM_STATE_PATH=./pl-automation/deployments/terraform/aws-eks-create-infrastructure-pla/create-cluster/terraform.tfstate" >> $GITHUB_ENV
+          echo "AWS_DEFAULT_OUTPUT=text" >> $GITHUB_ENV
+      # Checkout the repository to the GitHub Actions runner
+      - uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.TOKEN }}
+
+      - name: Configure AWS Credentials Action For GitHub Actions
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          role-to-assume: ${{ secrets.AWS_GH_ACTIONS_ROLE }}
+          aws-region: ${{github.event.inputs.region}}
+
+      - name: Allocate elastic IP
+        run: |
+          echo "ELASTIC_IP_ALLOCATION_ID=$(aws ec2 allocate-address --region ${{github.event.inputs.region}} | grep eipalloc | awk '{print $1}')" >> $GITHUB_ENV
+
+      - name: Create cluster folder
+        run: | 
+          mkdir -p $TERRAFORM_STATE_FOLDER_PATH
+
+      - name: Store region
+        run: | 
+          echo "${{github.event.inputs.region}}" > $REGION_FILE_PATH
+
+      - name: Store elasticIpAllocationId
+        run: |
+          printf [\"${{env.ELASTIC_IP_ALLOCATION_ID}}\"] > $ELASTIC_IP_ALLOCATION_ID_PATH
+          cat $ELASTIC_IP_ALLOCATION_ID_PATH
+          echo "ELASTIC_IP_ALLOCATION_ID=$(cat $ELASTIC_IP_ALLOCATION_ID_PATH)" >> $GITHUB_ENV
+      - name: Clone pl-automation
+        run: |
+          git clone ${{secrets.CI_CD_AUTOMATION_REPO_URL}} pl-automation
+
+      - name: 'Move terraform.tfstate to ./pl-automation/deployments/terraform/aws-eks-infrastructure-pla/create-cluster if it exists'
+        run: |
+          if test -f $TERRAFORM_STATE_PATH; then
+            mv $TERRAFORM_STATE_PATH $TERRAFORM_SCRIPTS_PATH
+          fi
+
+      # Install the latest version of Terraform CLI and configure the Terraform CLI configuration file with a Terraform Cloud user API token
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v1
+      # Initialize a new or existing Terraform working directory by creating initial files, loading any remote state, downloading modules, etc.
+      - name: Terraform Init
+        run: terraform -chdir=$TERRAFORM_SCRIPTS_PATH init
+
+        # On push to "master", build or change infrastructure according to Terraform configuration files
+        # Note: It is recommended to set up a required "strict" status check in your repository for "Terraform Cloud". See the documentation on "strict" required status checks for more information: https://help.github.com/en/github/administering-a-repository/types-of-required-status-checks
+      - name: Terraform Apply
+        run: terraform -chdir=$TERRAFORM_SCRIPTS_PATH apply -auto-approve -input=false
+        env:
+          TF_VAR_eks_aws_auth_roles: ${{ secrets.EKS_AWS_AUTH_ROLES }}
+          TF_VAR_eks_aws_auth_users: ${{ secrets.EKS_AWS_AUTH_USERS }}
+          TF_VAR_account_id: ${{ secrets.ACCOUNT_ID }}
+          TF_VAR_region: ${{github.event.inputs.region}}
+          TF_VAR_vpc_external_nat_ip_ids: ${{env.ELASTIC_IP_ALLOCATION_ID}}
+          TF_VAR_eks_cluster_name: ${{ github.event.inputs.clusterAlias }}
+          TF_VAR_vpc_single_nat_gateway: true
+          TF_VAR_vpc_one_nat_gateway_per_az: false
+
+
+      - name: Terraform destroy
+        if: ${{failure()}}
+        run: terraform -chdir=$TERRAFORM_SCRIPTS_PATH destroy -auto-approve -input=false
+        env:
+          TF_VAR_eks_aws_auth_roles: ${{ secrets.EKS_AWS_AUTH_ROLES }}
+          TF_VAR_eks_aws_auth_users: ${{ secrets.EKS_AWS_AUTH_USERS }}
+          TF_VAR_account_id: ${{ secrets.ACCOUNT_ID }}
+          TF_VAR_region: ${{github.event.inputs.region}}
+          TF_VAR_vpc_external_nat_ip_ids: ${{env.ELASTIC_IP_ALLOCATION_ID}}
+          TF_VAR_eks_cluster_name: ${{ github.event.inputs.clusterAlias }}
+          TF_VAR_vpc_single_nat_gateway: true
+          TF_VAR_vpc_one_nat_gateway_per_az: false
+
+      - name: 'Copy terraform.tfstate from ./pl-automation/deployments/terraform/aws-eks-infrastructure-pla/create-cluster'
+        run: |
+          if [ ! -d $TERRAFORM_STATE_FOLDER_PATH ]; then
+            mkdir -p $TERRAFORM_STATE_FOLDER_PATH
+          fi
+          cp $GENERATED_TERRAFORM_STATE_PATH $TERRAFORM_STATE_FOLDER_PATH
+
+      - name: 'Commit terraform.tfstate'
+        run: |
+          git config --global user.email ${{ secrets.GIT_EMAIL }}
+          git config --global user.name ${{ secrets.GIT_USERNAME }}
+          git pull
+          git add -f $TERRAFORM_STATE_PATH
+          git add -f $REGION_FILE_PATH
+          git add -f $ELASTIC_IP_ALLOCATION_ID_PATH
+          git commit -m "Updated terraform.tfstate"
+          git push origin master
+
+      - name: Terraform destroy
+        if: ${{failure()}}
+        run: terraform -chdir=$TERRAFORM_SCRIPTS_PATH destroy -auto-approve -input=false
+        env:
+          TF_VAR_eks_aws_auth_roles: ${{ secrets.EKS_AWS_AUTH_ROLES }}
+          TF_VAR_eks_aws_auth_users: ${{ secrets.EKS_AWS_AUTH_USERS }}
+          TF_VAR_account_id: ${{ secrets.ACCOUNT_ID }}
+          TF_VAR_region: ${{github.event.inputs.region}}
+          TF_VAR_vpc_external_nat_ip_ids: ${{env.ELASTIC_IP_ALLOCATION_ID}}
+          TF_VAR_eks_cluster_name: ${{ github.event.inputs.clusterAlias }}
+          TF_VAR_vpc_single_nat_gateway: true
+          TF_VAR_vpc_one_nat_gateway_per_az: false
+
+      - name: Configure AWS Credentials Action For GitHub Actions
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          role-to-assume: ${{ secrets.AWS_GH_ACTIONS_ROLE }}
+          aws-region: ${{github.event.inputs.region}}
+
+      - name: Connect to cluster
+        run: |
+          aws eks --region ${{github.event.inputs.region}} update-kubeconfig --name ${{ github.event.inputs.clusterAlias }}
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v3
+
+      - name: Install helm
+        uses: azure/setup-helm@v3
+        with:
+          version: '3.7.0'
+
+      - name: Install ingress nginx controller
+        run: |
+          helm upgrade --install ingress-nginx ingress-nginx --wait --timeout=300s --repo https://kubernetes.github.io/ingress-nginx --namespace ingress-nginx --create-namespace
+
+      - name: Write DNS name to file
+        run: |
+          kubectl get svc -n ingress-nginx | grep LoadBalancer
+          DNS_NAME=$(kubectl get svc -n ingress-nginx | grep LoadBalancer | awk '{print $4}')
+          echo $DNS_NAME
+          echo "$DNS_NAME" > $DNS_NAME_FILE_PATH
+
+      - name: Create k8s manifest for tls secret
+        run: |
+          cat > $SECRET_FILE_PATH << EOF
+            apiVersion: v1
+            data:
+              tls.crt: ${{secrets.TLS_CRT}}
+              tls.key: ${{secrets.TLS_KEY}}
+            kind: Secret
+            metadata:
+              name: pla.health
+              namespace: default
+            type: kubernetes.io/tls
+          EOF
+          cat $SECRET_FILE_PATH
+
+      - name: Create tls secret
+        run: |
+          kubectl apply -f $SECRET_FILE_PATH
+          kubectl get secret pla.health
+
+      - name: Create ingress
+        run: |
+          cat > $INGRESS_FILE_PATH << EOF
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            annotations:
+              nginx.ingress.kubernetes.io/client-body-buffer-size: 1m
+              nginx.ingress.kubernetes.io/configuration-snippet: |
+                add_header Access-Control-Allow-Credentials true;
+                add_header Access-Control-Allow-Headers "Content-Type, Content-Length, X-Content-Length, Access-Control-Allow-Origin, User-Agent, authorization, Authorization, x-signature, token, epiProtocolVersion, getProductData";
+              nginx.ingress.kubernetes.io/default-backend: epi
+              nginx.ingress.kubernetes.io/enable-cors: "true"
+              nginx.ingress.kubernetes.io/proxy-body-size: 8m
+              nginx.ingress.kubernetes.io/proxy-buffer-size: 8k
+              nginx.ingress.kubernetes.io/proxy-max-temp-file-size: 1024m
+              nginx.ingress.kubernetes.io/use-regex: "true"
+            name: pla-health-ingress
+            namespace: default
+          spec:
+            ingressClassName: nginx
+            rules:
+              - host: '*.pla.health'
+                http:
+                  paths:
+                    - backend:
+                        service:
+                          name: epi
+                          port:
+                            number: 80
+                      path: /
+                      pathType: Prefix
+            tls:
+              - hosts:
+                  - ${{github.event.inputs.dnsName}}
+                secretName: pla.health
+          EOF
+
+      - name: Apply ingress manifest
+        run: |
+          kubectl apply -f $INGRESS_FILE_PATH
+          kubectl get ingress pla-health-ingress
+
+      - name: 'Commit terraform.tfstate'
+        run: |
+          git config --global user.email ${{ secrets.GIT_EMAIL }}
+          git config --global user.name ${{ secrets.GIT_USERNAME }}
+          git pull
+          git add -f $DNS_NAME_FILE_PATH
+          git commit -m "Updated terraform.tfstate"
+          git push origin master

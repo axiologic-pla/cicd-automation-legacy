@@ -1,0 +1,99 @@
+name: 'Install Ethadapter'
+
+on:
+  workflow_dispatch:
+    inputs:
+      networkName:
+        description: 'Enter the network name'
+        required: true
+        type: string
+      clusterAlias:
+        description: 'Enter the name of your cluster'
+        required: true
+        type: string
+
+permissions:
+  id-token: write # This is required for requesting the JWT
+  contents: read  # This is required for actions/checkout
+
+jobs:
+  installEthadapter:
+    name: 'Install Ethadapter'
+    runs-on: ubuntu-latest
+    environment: production
+    # Use the Bash shell regardless whether the GitHub Actions runner is ubuntu-latest, macos-latest, or windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Set env variables
+        run: |
+          echo "NETWORK_PATH=./${{ github.event.inputs.networkName }}" >> $GITHUB_ENV
+          echo "PRIVATE_PATH=./private" >> $GITHUB_ENV
+          echo "CLUSTER_PATH=./${{ github.event.inputs.networkName }}/${{ github.event.inputs.clusterAlias }}" >> $GITHUB_ENV
+          echo "GITHUB_INFO_FILE_PATH=./private/${{ github.event.inputs.clusterAlias }}/${{ github.event.inputs.networkName }}"/private/github.info.yaml >> $GITHUB_ENV
+          echo "TMP_FOLDER_PATH=./${{ github.event.inputs.networkName }}/${{ github.event.inputs.clusterAlias }}/tmp" >> $GITHUB_ENV
+          echo "INFRA_FILE_PATH=./private/${{ github.event.inputs.clusterAlias }}/${{ github.event.inputs.networkName }}" >> $GITHUB_ENV
+          echo "SCRIPTS_FILE_PATH=./private/${{ github.event.inputs.clusterAlias }}/${{ github.event.inputs.networkName }}" >> $GITHUB_ENV
+      - name: Set env variables
+        run: |
+          echo "REGION_FILE_PATH=./private/${{ github.event.inputs.clusterAlias }}/${{ github.event.inputs.networkName }}/region" >> $GITHUB_ENV
+      # Checkout the repository to the GitHub Actions runner
+      - uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.TOKEN }}
+
+      - name: Read region
+        run: |
+          echo "REGION=$(cat $REGION_FILE_PATH)" >> $GITHUB_ENV
+
+      - name: Clone pl-automation
+        run: |
+          git clone ${{secrets.CI_CD_AUTOMATION_REPO_URL}} pl-automation
+      - name: Configure AWS Credentials Action For GitHub Actions
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          role-to-assume: ${{ secrets.AWS_GH_ACTIONS_ROLE }}
+          aws-region: ${{env.REGION}}
+      - name: Connect to cluster
+        run: |
+            aws eks --region ${{env.REGION}} update-kubeconfig --name ${{ github.event.inputs.clusterAlias }}
+            
+      - name: Install kubectl 
+        uses: azure/setup-kubectl@v3
+        
+      - name: Run kubectl
+        run: |
+          kubectl get pods
+            
+      - name: Install helm
+        uses: azure/setup-helm@v3
+        with:
+           version: '3.7.0'
+           
+      - name: Install pharmaledger helm charts
+        run: |
+          helm repo add pharmaledgerassoc https://pharmaledgerassoc.github.io/helm-charts
+      
+      - name: Install pharmaledger helm plugins
+        run: |
+          helm plugin install https://github.com/pharmaledgerassoc/helm-plugins 
+
+      - name: Generate github.info.yaml
+        run: |
+          cat > $GITHUB_INFO_FILE_PATH << EOF          
+          git_shared_configuration:
+            repository_name: ${{github.repository}}
+            read_write_token: ${{secrets.TOKEN}}
+          
+          git_upload:
+            enabled: true
+            email: ${{secrets.GIT_EMAIL}}
+            user: ${{secrets.GIT_USERNAME}}
+            git_repo_storage_path: "networks"
+          EOF
+
+      - name: Install ethadapter
+        run: |
+          cd $PRIVATE_PATH
+          ../pl-automation/deployments/bin/ethadapter.sh ${{ github.event.inputs.clusterAlias }} ${{ github.event.inputs.networkName }}

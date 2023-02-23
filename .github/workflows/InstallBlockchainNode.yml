@@ -1,0 +1,116 @@
+name: 'Install blockchain node'
+
+on:
+  workflow_dispatch:
+    inputs:
+      networkName:
+        description: 'Enter the network name'
+        required: true
+        type: string
+      clusterAlias:
+        description: 'Enter the name of your cluster'
+        required: true
+        type: string
+
+permissions:
+  id-token: write # This is required for requesting the JWT
+  contents: read  # This is required for actions/checkout
+
+jobs:
+  createInfrastructure:
+    name: 'Install blockchain node'
+    runs-on: ubuntu-latest
+    environment: production
+    # Use the Bash shell regardless whether the GitHub Actions runner is ubuntu-latest, macos-latest, or windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Set env variables
+        run: |
+          echo "PRIVATE_PATH=./private" >> $GITHUB_ENV
+          echo "GITHUB_INFO_FILE_PATH=./private/${{ github.event.inputs.clusterAlias }}/${{ github.event.inputs.networkName }}/private/github.info.yaml" >> $GITHUB_ENV
+          echo "INFRA_FILE_PATH=./private/${{ github.event.inputs.clusterAlias }}/${{ github.event.inputs.networkName }}" >> $GITHUB_ENV
+          echo "SCRIPTS_FILE_PATH=./private/${{ github.event.inputs.clusterAlias }}/${{ github.event.inputs.networkName }}" >> $GITHUB_ENV
+          echo "NETWORKS_PATH=./networks" >> $GITHUB_ENV
+          echo "REGION_FILE_PATH=./private/${{ github.event.inputs.clusterAlias }}/${{ github.event.inputs.networkName }}/region" >> $GITHUB_ENV
+          echo "TMP_FOLDER_PATH=./private/${{ github.event.inputs.clusterAlias }}/${{ github.event.inputs.networkName }}/tmp" >> $GITHUB_ENV
+      # Checkout the repository to the GitHub Actions runner
+      - uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.TOKEN }}
+
+      - name: Read region
+        run: |
+          echo "REGION=$(cat $REGION_FILE_PATH)" >> $GITHUB_ENV
+
+      - name: Clone pl-automation
+        run: |
+          git clone ${{secrets.CI_CD_AUTOMATION_REPO_URL}} pl-automation
+
+      - name: Configure AWS Credentials Action For GitHub Actions
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          role-to-assume: ${{ secrets.AWS_GH_ACTIONS_ROLE }}
+          aws-region: ${{env.REGION}}
+      - name: Connect to cluster
+        run: |
+            aws eks --region ${{env.REGION}} update-kubeconfig --name ${{ github.event.inputs.clusterAlias }}
+            
+      - name: Install kubectl 
+        uses: azure/setup-kubectl@v3
+        
+      - name: Run kubectl
+        run: |
+          kubectl get pods
+            
+      - name: Install helm
+        uses: azure/setup-helm@v3
+        with:
+           version: '3.7.0'
+           
+      - name: Install pharmaledger helm charts
+        run: |
+          helm repo add pharmaledgerassoc https://pharmaledgerassoc.github.io/helm-charts
+      
+      - name: Install pharmaledger helm plugins
+        run: |
+          helm plugin install https://github.com/pharmaledgerassoc/helm-plugins 
+
+      - name: Generate github.info.yaml
+        run: |
+          cat > $GITHUB_INFO_FILE_PATH << EOF          
+          git_shared_configuration:
+            repository_name: ${{github.repository}}
+            read_write_token: ${{secrets.TOKEN}}
+          
+          git_upload:
+            enabled: true
+            email: ${{secrets.GIT_EMAIL}}
+            user: ${{secrets.GIT_USERNAME}}
+            git_repo_storage_path: "networks"
+          EOF
+
+      - name: Install blockchain node
+        run: |
+          pwd
+          ls
+          NO_FOLDERS=$(find $NETWORKS_PATH -mindepth 4 -path '*/${{github.event.inputs.networkName}}/*' | wc -l)
+          echo $NO_FOLDERS
+          cd $PRIVATE_PATH
+          if [ $NO_FOLDERS == 0 ]; then
+            echo "Creating new network"
+            ../pl-automation/deployments/bin/new-network.sh ${{ github.event.inputs.clusterAlias }} ${{ github.event.inputs.networkName }}
+          else
+            echo "Join network"
+            ../pl-automation/deployments/bin/join-network.sh ${{ github.event.inputs.clusterAlias }} ${{ github.event.inputs.networkName }} 
+          fi
+
+      - name: Commit generated files
+        run: |
+          git config --global user.email ${{ secrets.GIT_EMAIL }}
+          git config --global user.name ${{ secrets.GIT_USERNAME }}
+          git pull
+          git add -f $INFRA_FILE_PATH
+          git commit -m "Updated terraform.tfstate"
+          git push origin master

@@ -1,0 +1,89 @@
+name: 'Check Liveness'
+
+on:
+  workflow_dispatch:
+    inputs:
+      networkName:
+        description: 'Enter the network name'
+        required: true
+        type: string
+      clusterAlias:
+        description: 'Enter the name of your cluster'
+        required: true
+        type: string
+      targetComponent:
+        description: 'Select component'
+        required: true
+        type: choice
+        options:
+        - apihub
+        - ethadapter
+permissions:
+  id-token: write # This is required for requesting the JWT
+  contents: read  # This is required for actions/checkout
+
+jobs:
+  checkLiveness:
+    name: 'Check Liveness for selected component'
+    runs-on: ubuntu-latest
+    environment: production
+    
+    # Use the Bash shell regardless whether the GitHub Actions runner is ubuntu-latest, macos-latest, or windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Set env variables
+        run: |
+          echo "REGION_FILE_PATH=./private/${{ github.event.inputs.clusterAlias }}/${{ github.event.inputs.networkName }}/region" >> $GITHUB_ENV
+      - uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.TOKEN }}
+          
+      - name: Read region
+        run: |
+          echo "REGION=$(cat $REGION_FILE_PATH)" >> $GITHUB_ENV
+          
+      - name: Configure AWS Credentials Action For GitHub Actions
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          role-to-assume: ${{ secrets.AWS_GH_ACTIONS_ROLE }}
+          aws-region: ${{env.REGION}}
+          
+      - name: Connect to cluster
+        run: |
+            aws eks --region ${{env.REGION}} update-kubeconfig --name ${{ github.event.inputs.clusterAlias }}
+
+      - name: Install kubectl 
+        uses: azure/setup-kubectl@v3
+        
+      - name: Preparing the script
+        run: |
+          cat > getLogs.sh << EOF
+          selector="app.kubernetes.io/name=epi"
+          case ${{ github.event.inputs.targetComponent }} in
+            "apihub")
+              livenessUrl="http://127.0.0.1:8080/ready-probe"
+              readynessUrl="http://127.0.0.1:8080/ready-probe"
+              ;;
+
+            "ethadapter")
+              selector="app.kubernetes.io/name=ethadapter"
+              livenessUrl="http://127.0.0.1:3000/totalNumberOfAnchors"
+              readynessUrl="http://127.0.0.1:3000/health"
+              ;;
+          esac
+          
+          echo "Get status of the pod by running kubectl get pods --selector=\$selector"
+          kubectl get pods --selector=\$selector
+          
+          echo "Testing liveness of the component from inside of the pod (expected to get: HTTP/1.1 200 OK)"
+          podName="\$(kubectl get pods --selector=\$selector --no-headers -o custom-columns="POD-NAME":.metadata.name)"
+          kubectl exec -i \$podName -- sh -c "wget --spider --server-response --quiet \"\$livenessUrl\" 2>&1 | grep \"HTTP/\" | awk \"{print \$2}\""
+          EOF
+          
+      - name: Set permissions
+        run: chmod 755 getLogs.sh
+        
+      - name: Retrieving info
+        run: ./getLogs.sh
