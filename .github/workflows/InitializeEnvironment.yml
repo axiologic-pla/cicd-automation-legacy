@@ -29,29 +29,59 @@ jobs:
     steps:
       - name: Set env variables
         run: |
-          echo "NETWORK_PATH=./${{ github.event.inputs.networkName }}" >> $GITHUB_ENV
           echo "PRIVATE_PATH=./private" >> $GITHUB_ENV
-          echo "CLUSTER_PATH=./${{ github.event.inputs.networkName }}/${{ github.event.inputs.clusterAlias }}" >> $GITHUB_ENV
-          echo "TMP_FOLDER_PATH=./${{ github.event.inputs.networkName }}/${{ github.event.inputs.clusterAlias }}/tmp" >> $GITHUB_ENV          
+          echo "NETWORK_PATH=./private/${{ github.event.inputs.clusterAlias }}/${{ github.event.inputs.networkName }}" >> $GITHUB_ENV
+          echo "NETWORK_PRIVATE_PATH=./private/${{ github.event.inputs.clusterAlias }}/${{ github.event.inputs.networkName }}/private" >> $GITHUB_ENV
+          echo "INPUT_JSON_PATH=./private/${{ github.event.inputs.clusterAlias }}/${{ github.event.inputs.networkName }}/epiValues.json" >> $GITHUB_ENV
+          echo "LOCAL_JSON_PATH=./private/${{ github.event.inputs.clusterAlias }}/${{ github.event.inputs.networkName }}/local.json" >> $GITHUB_ENV
+          echo "TMP_FOLDER_PATH=./private/${{ github.event.inputs.clusterAlias }}/${{ github.event.inputs.networkName }}/tmp" >> $GITHUB_ENV
       # Checkout the repository to the GitHub Actions runner
       - uses: actions/checkout@v3
         with:
-          token: ${{ secrets.GIT_TOKEN }}
+          token: ${{ secrets.TOKEN }}
+
+
+      - name: Install helm
+        uses: azure/setup-helm@v3
+        with:
+          version: '3.7.0'
+
+      - name: Install pharmaledgerassoc helm plugins
+        run: |
+          helm plugin install https://github.com/pharmaledgerassoc/helm-plugins 
 
       - name: Clone pl-automation
         run: |
           git clone ${{secrets.CI_CD_AUTOMATION_REPO_URL}} pl-automation
-      
+
       - name: Init environment
         run: |
           cd $PRIVATE_PATH
           ../pl-automation/deployments/bin/init.sh ${{ github.event.inputs.clusterAlias }} ${{ github.event.inputs.networkName }}
-      - name: 'Commit changes'
+
+      - name: Cleanup
         run: |
-          cd $PRIVATE_PATH
+          rm -rf $NETWORK_PRIVATE_PATH
+
+      - name: Create json with network name and clusterAlias
+        run: |
+          cat > $LOCAL_JSON_PATH << EOF
+          {
+            "clusterAlias": "${{github.event.inputs.clusterAlias}}",
+            "networkName": "${{github.event.inputs.networkName}}"
+          }
+          EOF
+
+      - name: Generate files
+        run: |
+          helm pl-plugin --generateEpiConfig -i $INPUT_JSON_PATH $LOCAL_JSON_PATH -o $PRIVATE_PATH
+          ls $PRIVATE_PATH
+
+      - name: Commit generated files
+        run: |
           git config --global user.email ${{ secrets.GIT_EMAIL }}
           git config --global user.name ${{ secrets.GIT_USERNAME }}
-          git pull 
-          git add .
-          git commit -m "Initialized cluster ${{github.event.inputs.clusterAlias}}"
+          git pull
+          git add $PRIVATE_PATH
+          git commit -m "Initialized environment"
           git push origin master
