@@ -79,7 +79,7 @@ jobs:
           echo "requests:" >> $PVC_FILE_PATH
           sed -i 's/\(requests\)/\  \1/' $PVC_FILE_PATH
           sed -i 's/\(requests\)/\  \1/' $PVC_FILE_PATH
-          echo "storage: 3Gi" >> $PVC_FILE_PATH
+          echo "storage: 20Gi" >> $PVC_FILE_PATH
           sed -i 's/\(storage\)/\  \1/' $PVC_FILE_PATH
           sed -i 's/\(storage\)/\  \1/' $PVC_FILE_PATH
           sed -i 's/\(storage\)/\  \1/' $PVC_FILE_PATH
