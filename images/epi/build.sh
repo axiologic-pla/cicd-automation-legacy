@@ -1,6 +1,7 @@
 #!/bin/bash
 chmod +x values.sh
 source values.sh
+printenv
 git clone $EPI_WORKSPACE tmp/epi
 
 cd tmp/epi
