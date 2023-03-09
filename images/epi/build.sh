@@ -6,7 +6,7 @@ git clone $EPI_WORKSPACE tmp/epi
 cd tmp/epi
 source ../../values.sh
 
-if [ "$BUILD_TYPE" == "dev" ]; then
+if [[ "$BUILD_TYPE" == "dev" ]]; then
   echo "npm run dev-install"
   npm run dev-install
 else
