@@ -35,10 +35,8 @@ ARG SOURCE="/tmp/epi"
 
 COPY --from=base ${SOURCE}/apihub-root apihub-root
 COPY --from=base ${SOURCE}/bin bin
-COPY --from=base ${SOURCE}/cardinal cardinal
 COPY --from=base ${SOURCE}/demiurge demiurge
 COPY --from=base ${SOURCE}/dsu-fabric-ssapp dsu-fabric-ssapp
-COPY --from=base ${SOURCE}/gtin-dsu-wizard gtin-dsu-wizard
 COPY --from=base ${SOURCE}/gtin-resolver gtin-resolver
 COPY --from=base ${SOURCE}/leaflet-ssapp leaflet-ssapp
 COPY --from=base ${SOURCE}/opendsu-sdk opendsu-sdk
