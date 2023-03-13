@@ -11,7 +11,6 @@ COPY --chown=1000:1000 $SOURCE_FOLDER_NAME/apihub-root apihub-root
 COPY --chown=1000:1000 $SOURCE_FOLDER_NAME/bin bin
 COPY --chown=1000:1000 $SOURCE_FOLDER_NAME/demiurge demiurge
 COPY --chown=1000:1000 $SOURCE_FOLDER_NAME/dsu-fabric-ssapp dsu-fabric-ssapp
-COPY --chown=1000:1000 $SOURCE_FOLDER_NAME/gtin-dsu-wizard gtin-dsu-wizard
 COPY --chown=1000:1000 $SOURCE_FOLDER_NAME/gtin-resolver gtin-resolver
 COPY --chown=1000:1000 $SOURCE_FOLDER_NAME/leaflet-ssapp leaflet-ssapp
 COPY --chown=1000:1000 $SOURCE_FOLDER_NAME/opendsu-sdk opendsu-sdk
